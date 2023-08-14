@@ -3,11 +3,10 @@ package consumer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
-
-	"encoding/json"
 
 	"github.com/gofrs/uuid"
 	"github.com/jackc/pgx/v4"
@@ -84,7 +83,6 @@ func Consume(connString string, limit int) {
 	if err != nil {
 		logrus.Errorf("QueueDeclare: %v", err)
 	}
-	msgCount := 0
 
 	msgs, err := ch.Consume(
 		q.Name, // queue
@@ -98,6 +96,8 @@ func Consume(connString string, limit int) {
 	if err != nil {
 		logrus.Errorf("Consume: %v", err)
 	}
+
+	msgCount := 0
 	temp := &Message{}
 	start := time.Now()
 	batch := &pgx.Batch{}
@@ -108,13 +108,12 @@ func Consume(connString string, limit int) {
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"Body:": d.Body, "temp:": &temp}).Errorf("Unmarshal: %v", err)
 		}
-		msgCount++
+
 		batch.Queue("INSERT INTO kafka.kafka_storage (id, kafka_message) VALUES ($1, $2)", temp.ID, temp.RandomInt)
 		batch.Queue("Update kafka.kafka_storage Set \"check\"=true WHERE id=$1", temp.ID)
-		if msgCount == limit {
-			break
-		}
-		if time.Since(start) > time.Second {
+
+		msgCount++
+		if msgCount == limit || time.Since(start) > time.Second {
 			break
 		}
 	}
