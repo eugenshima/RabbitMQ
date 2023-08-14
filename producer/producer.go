@@ -2,11 +2,13 @@ package producer
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
-	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -22,6 +24,11 @@ func random(min, max int) int {
 	return rand.Intn(max-min) + min
 }
 
+type Message struct {
+	Id        uuid.UUID
+	RandomInt int
+}
+
 func Produce(connString string, limit int) {
 	conn, err := amqp.Dial(connString)
 	failOnError(err, "Failed to connect to RabbitMQ")
@@ -32,32 +39,37 @@ func Produce(connString string, limit int) {
 	defer ch.Close()
 
 	q, err := ch.QueueDeclare(
-		"hello", // name
-		false,   // durable
-		false,   // delete when unused
-		false,   // exclusive
-		false,   // no-wait
-		nil,     // arguments
+		"hello1", // name
+		false,    // durable
+		false,    // delete when unused
+		false,    // exclusive
+		false,    // no-wait
+		nil,      // arguments
 	)
 	failOnError(err, "Failed to declare a queue")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	msgCount := 0
-	for time.Since(time.Now()) < time.Second && msgCount < limit {
-		body := random(100, 1000)
+	start := time.Now()
+	for time.Since(start) < time.Second && msgCount < limit {
+		msg := Message{
+			Id:        uuid.New(),
+			RandomInt: random(100, 1000),
+		}
+		recordJSON, _ := json.Marshal(msg)
 		err = ch.PublishWithContext(ctx,
 			"",     // exchange
 			q.Name, // routing key
 			false,  // mandatory
 			false,  // immediate
 			amqp.Publishing{
-				ContentType: "text/plain",
-				Body:        []byte(strconv.Itoa(body)),
+				ContentType: "application/json",
+				Body:        recordJSON,
 			})
 		failOnError(err, "Failed to publish a message")
-		log.Printf(" [%d] Sent %v\n", msgCount, body)
+		log.Printf("%d -> %v : %v\n", msgCount, msg.Id, msg.RandomInt)
 		msgCount++
 	}
-
+	fmt.Println("time, spent on producing: ", time.Since(start).Seconds())
 }

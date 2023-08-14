@@ -7,5 +7,6 @@ import (
 
 func main() {
 	connString := config.ConstConn
-	consumer.Consume(connString)
+	limit := config.ConstLimitMsg
+	consumer.Consume(connString, limit)
 }
