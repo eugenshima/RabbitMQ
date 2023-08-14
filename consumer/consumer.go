@@ -1,3 +1,4 @@
+// Package consumer contains consume functions and database operations
 package consumer
 
 import (
@@ -34,17 +35,13 @@ func NewDBPsql() (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-func failOnError(err error, msg string) {
-	if err != nil {
-		log.Panicf("%s: %s", msg, err)
-	}
-}
-
+// Message struct for consuming messages from RabbitMQ
 type Message struct {
-	Id        uuid.UUID
+	ID        uuid.UUID
 	RandomInt int
 }
 
+// Consume function consumes messages from RabbitMQ
 func Consume(connString string, limit int) {
 	pool, err := NewDBPsql()
 	if err != nil {
@@ -53,12 +50,28 @@ func Consume(connString string, limit int) {
 	defer pool.Close()
 
 	conn, err := amqp.Dial(connString)
-	failOnError(err, "Failed to connect to RabbitMQ")
-	defer conn.Close()
+	if err != nil {
+		logrus.WithFields(logrus.Fields{"connString:": connString}).Errorf("Dial: %v", err)
+	}
+	defer func() {
+		err = conn.Close()
+		if err != nil {
+			logrus.Errorf("Close: %v", err)
+			return
+		}
+	}()
 
 	ch, err := conn.Channel()
-	failOnError(err, "Failed to open a channel")
-	defer ch.Close()
+	if err != nil {
+		logrus.Errorf("Channel: %v", err)
+	}
+	defer func() {
+		err = ch.Close()
+		if err != nil {
+			logrus.Errorf("Close: %v", err)
+			return
+		}
+	}()
 
 	q, err := ch.QueueDeclare(
 		"hello1", // name
@@ -68,7 +81,9 @@ func Consume(connString string, limit int) {
 		false,    // no-wait
 		nil,      // arguments
 	)
-	failOnError(err, "Failed to declare a queue")
+	if err != nil {
+		logrus.Errorf("QueueDeclare: %v", err)
+	}
 	msgCount := 0
 
 	msgs, err := ch.Consume(
@@ -80,20 +95,22 @@ func Consume(connString string, limit int) {
 		false,  // no-wait
 		nil,    // args
 	)
-	failOnError(err, "Failed to register a consumer")
+	if err != nil {
+		logrus.Errorf("Consume: %v", err)
+	}
 	temp := &Message{}
 	start := time.Now()
 	batch := &pgx.Batch{}
 
 	for d := range msgs {
 		log.Printf("Received a message: [%d] -> %s", msgCount, d.Body)
-		err := json.Unmarshal(d.Body, &temp)
+		err = json.Unmarshal(d.Body, &temp)
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"Body:": d.Body, "temp:": &temp}).Errorf("Unmarshal: %v", err)
 		}
 		msgCount++
-		batch.Queue("INSERT INTO kafka.kafka_storage (id, kafka_message) VALUES ($1, $2)", temp.Id, temp.RandomInt)
-		batch.Queue("Update kafka.kafka_storage Set \"check\"=true WHERE id=$1", temp.Id)
+		batch.Queue("INSERT INTO kafka.kafka_storage (id, kafka_message) VALUES ($1, $2)", temp.ID, temp.RandomInt)
+		batch.Queue("Update kafka.kafka_storage Set \"check\"=true WHERE id=$1", temp.ID)
 		if msgCount == limit {
 			break
 		}
@@ -101,7 +118,7 @@ func Consume(connString string, limit int) {
 			break
 		}
 	}
-	err = Insert(context.Background(), pool, batch)
+	err = Insert(pool, batch)
 	if err != nil {
 		logrus.Errorf("Failed to Insert message: %v", err)
 	}
@@ -111,7 +128,7 @@ func Consume(connString string, limit int) {
 }
 
 // Insert function executes SQL request to insert RabbitMQ message into database
-func Insert(ctx context.Context, pool *pgxpool.Pool, batch *pgx.Batch) error {
+func Insert(pool *pgxpool.Pool, batch *pgx.Batch) error {
 	br := pool.SendBatch(context.Background(), batch)
 	_, err := br.Exec()
 	if err != nil {

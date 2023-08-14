@@ -1,3 +1,4 @@
+// Package producer contains produce functions
 package producer
 
 import (
@@ -10,13 +11,14 @@ import (
 
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/sirupsen/logrus"
 )
 
-func failOnError(err error, msg string) {
-	if err != nil {
-		log.Panicf("%s: %s", msg, err)
-	}
-}
+// constants for message
+const (
+	MIN = 100
+	MAX = 1000
+)
 
 // random function generates a random number between min & max
 func random(min, max int) int {
@@ -24,19 +26,37 @@ func random(min, max int) int {
 	return rand.Intn(max-min) + min
 }
 
+// Message struct for pushing messages to RabbitMQ
 type Message struct {
-	Id        uuid.UUID
+	ID        uuid.UUID
 	RandomInt int
 }
 
+// Produce function Produces messages to RabbitMQ
 func Produce(connString string, limit int) {
 	conn, err := amqp.Dial(connString)
-	failOnError(err, "Failed to connect to RabbitMQ")
-	defer conn.Close()
+	if err != nil {
+		logrus.Errorf("Dial: %v", err)
+	}
+	defer func() {
+		err = conn.Close()
+		if err != nil {
+			logrus.Errorf("Close: %v", err)
+			return
+		}
+	}()
 
 	ch, err := conn.Channel()
-	failOnError(err, "Failed to open a channel")
-	defer ch.Close()
+	if err != nil {
+		logrus.Errorf("Channel: %v", err)
+	}
+	defer func() {
+		err = ch.Close()
+		if err != nil {
+			logrus.Errorf("Close: %v", err)
+			return
+		}
+	}()
 
 	q, err := ch.QueueDeclare(
 		"hello1", // name
@@ -46,19 +66,18 @@ func Produce(connString string, limit int) {
 		false,    // no-wait
 		nil,      // arguments
 	)
-	failOnError(err, "Failed to declare a queue")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
+	if err != nil {
+		logrus.Errorf("QueueDeclare: %v", err)
+	}
 	msgCount := 0
 	start := time.Now()
 	for time.Since(start) < time.Second && msgCount < limit {
 		msg := Message{
-			Id:        uuid.New(),
-			RandomInt: random(100, 1000),
+			ID:        uuid.New(),
+			RandomInt: random(MIN, MAX),
 		}
 		recordJSON, _ := json.Marshal(msg)
-		err = ch.PublishWithContext(ctx,
+		err = ch.PublishWithContext(context.TODO(),
 			"",     // exchange
 			q.Name, // routing key
 			false,  // mandatory
@@ -67,8 +86,10 @@ func Produce(connString string, limit int) {
 				ContentType: "application/json",
 				Body:        recordJSON,
 			})
-		failOnError(err, "Failed to publish a message")
-		log.Printf("%d -> %v : %v\n", msgCount, msg.Id, msg.RandomInt)
+		if err != nil {
+			logrus.Errorf("PublishWithContext: %v", err)
+		}
+		log.Printf("%d -> %v : %v\n", msgCount, msg.ID, msg.RandomInt)
 		msgCount++
 	}
 	fmt.Println("time, spent on producing: ", time.Since(start).Seconds())

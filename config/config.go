@@ -1,3 +1,4 @@
+// Package config ....
 package config
 
 // Constants for Rabbit Message Queue
