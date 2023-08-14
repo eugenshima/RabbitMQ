@@ -82,8 +82,8 @@ func Consume(connString string, limit int) {
 	)
 	failOnError(err, "Failed to register a consumer")
 	temp := &Message{}
-	var rows [][]interface{}
 	start := time.Now()
+	batch := &pgx.Batch{}
 
 	for d := range msgs {
 		log.Printf("Received a message: [%d] -> %s", msgCount, d.Body)
@@ -91,39 +91,32 @@ func Consume(connString string, limit int) {
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"Body:": d.Body, "temp:": &temp}).Errorf("Unmarshal: %v", err)
 		}
-		rows = append(rows, []interface{}{
-			temp.Id,
-			temp.RandomInt,
-		})
 		msgCount++
+		batch.Queue("INSERT INTO kafka.kafka_storage (id, kafka_message) VALUES ($1, $2)", temp.Id, temp.RandomInt)
+		batch.Queue("Update kafka.kafka_storage Set \"check\"=true WHERE id=$1", temp.Id)
 		if msgCount == limit {
 			break
 		}
-
 		if time.Since(start) > time.Second {
 			break
 		}
 	}
-	fmt.Println("time, spent on reading: ", time.Since(start).Seconds())
-	err = Create(context.Background(), pool, rows)
+	err = Insert(context.Background(), pool, batch)
 	if err != nil {
-		logrus.Errorf("Create: %v", err)
+		logrus.Errorf("Failed to Insert message: %v", err)
 	}
+
+	fmt.Println("time, spent on reading: ", time.Since(start).Seconds())
 	fmt.Println("received messages: ", msgCount)
 }
 
-// Create function executes SQL request to insert RabbitMQ message into database
-func Create(ctx context.Context, pool *pgxpool.Pool, rows [][]interface{}) error {
-	_, err := pool.CopyFrom(
-		ctx,
-		pgx.Identifier{"kafka", "kafka_storage"},
-		[]string{"id", "kafka_message"},
-		pgx.CopyFromRows(rows),
-	)
+// Insert function executes SQL request to insert RabbitMQ message into database
+func Insert(ctx context.Context, pool *pgxpool.Pool, batch *pgx.Batch) error {
+	br := pool.SendBatch(context.Background(), batch)
+	_, err := br.Exec()
 	if err != nil {
-		return fmt.Errorf("CopyFrom: %W", err)
+		return fmt.Errorf("exec: %w", err)
 	}
 
-	fmt.Println()
 	return nil
 }

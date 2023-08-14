@@ -72,4 +72,5 @@ func Produce(connString string, limit int) {
 		msgCount++
 	}
 	fmt.Println("time, spent on producing: ", time.Since(start).Seconds())
+	fmt.Println("sent messages: ", msgCount)
 }
